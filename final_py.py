@@ -732,11 +732,11 @@ param_dist = {
 }
 
 lgbm = LGBMRegressor(n_jobs=-1, verbose=-1)
-tscv = TimeSeriesSplit(n_splits=5)
+tscv = TimeSeriesSplit(n_splits=3)
 random_search = RandomizedSearchCV(
     estimator=lgbm,
     param_distributions=param_dist,
-    n_iter=100,
+    n_iter=50,
     scoring='neg_mean_squared_error',
     cv=tscv,
     random_state=42,
