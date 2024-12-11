@@ -1,5 +1,9 @@
-# %% [code]
-# %%
+#!/usr/bin/env python
+# coding: utf-8
+
+# In[2]:
+
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -35,40 +39,46 @@ from sklearn.neighbors import KNeighborsRegressor
 from sklearn.svm import SVR
 from xgboost import XGBRegressor
 from lightgbm import LGBMRegressor
+
 from sklearn.preprocessing import LabelEncoder
 import pickle
-
+import external_data.example_estimator  # For external data processing
+importlib.reload(external_data.example_estimator)
+get_ipython().run_line_magic('matplotlib', 'inline')
 pd.pandas.set_option('display.max_columns', None)
 from sklearn.cluster import KMeans
-import sys
-sys.path.append('/kaggle/input/ext-dataset/external_data')
-import importlib
-import example_estimator
-importlib.reload(example_estimator)
 
-# %%
-#pip install geopy
+
+# In[4]:
+
+
+get_ipython().system('pip install geopy')
 from geopy.distance import distance
 
-# %% [markdown]
+
 # We are starting by loading the train and test data.
 # We then use functions from example_estimator file to merge with weather data and encode the dates.
 
-# %%
+# In[28]:
 
-train_data = pd.read_parquet("/kaggle/input/msdb-2024/train.parquet")
-test_data = pd.read_parquet("/kaggle/input/msdb-2024/final_test.parquet")
 
-train_data = example_estimator._encode_dates(train_data)
-train_data = example_estimator._merge_external_data(train_data)
+# Data paths
+data_path = 'data/train.parquet'
+test_path = 'data/final_test.parquet'
+
+train_data = pd.read_parquet(Path(data_path))
+test_data = pd.read_parquet(Path(test_path))
+
+train_data = external_data.example_estimator._encode_dates(train_data)
+train_data = external_data.example_estimator._merge_external_data(train_data)
 print(train_data.columns)
 
 
-# %% [markdown]
 # Now,
 # Let us create a set of features that can be derived from the data that we have
 
-# %%
+# In[30]:
+
 
 def preprocess_and_engineer_features(data, target):
     """
@@ -158,13 +168,11 @@ def preprocess_and_engineer_features(data, target):
         return data[selected_features]
 
 
-# Application of the function
 final_train_data = preprocess_and_engineer_features(train_data, True)
 print(final_train_data.head())
 print(final_train_data.info())
 
 
-# %% [markdown]
 # **External data**
 # 
 # Vacations in Paris can be a very crucial factor in determining the bike count
@@ -177,13 +185,21 @@ print(final_train_data.info())
 # Liscence: Licence Ouverte / Open Licence version 2.0
 # 
 
-# %%
-holidays = pd.read_csv("/kaggle/input/vacances-paris/vacances_paris.csv")
+# In[9]:
 
-# %%
+
+holidays = pd.read_csv("data/vacances_paris.csv")
+
+
+# In[10]:
+
+
 holidays.head(5)
 
-# %%
+
+# In[31]:
+
+
 def add_school_holidays(data, holidays_file):
     """
     Incorporates school holiday information into the input DataFrame.
@@ -227,17 +243,58 @@ def add_school_holidays(data, holidays_file):
 
     return data
 
-# Application de la fonction
-final_train_data = add_school_holidays(final_train_data, "/kaggle/input/vacances-paris/vacances_paris.csv")
+final_train_data = add_school_holidays(final_train_data, "data/vacances_paris.csv")
 
 print(final_train_data.head())
 print(final_train_data.info())
 
 
-# %% [markdown]
+# In[32]:
+
+
+def add_lockdown_status(data):
+    """
+    Incorporates lockdown status information into the input DataFrame.
+
+    Parameters:
+        data (pd.DataFrame): The input DataFrame containing data with a 'date' column.
+
+    Returns:
+        pd.DataFrame: The input DataFrame with an additional 'lockdown_status' feature.
+    """
+    lockdown_df = pd.DataFrame(pd.date_range(start='2020-01-01', end='2021-12-31', freq='D'), columns=['date'])
+    lockdown_df['lockdown_status'] = 'no_lockdown'  
+
+    # Defining the Paris lockdown periods
+    lockdown_periods = [
+        {'start': '2020-03-17', 'end': '2020-05-11', 'type': 'lockdown'},
+        {'start': '2020-10-30', 'end': '2020-12-15', 'type': 'lockdown'},
+        {'start': '2021-04-03', 'end': '2021-05-02', 'type': 'lockdown'},
+        {'start': '2020-05-12', 'end': '2020-06-11', 'type': 'partial'},
+        {'start': '2020-10-17', 'end': '2020-10-29', 'type': 'partial'},
+        {'start': '2020-12-16', 'end': '2020-12-31', 'type': 'partial'},
+        {'start': '2021-05-03', 'end': '2021-05-31', 'type': 'partial'}
+    ]
+
+    for period in lockdown_periods:
+        lockdown_df.loc[(lockdown_df['date'] >= period['start']) & (lockdown_df['date'] <= period['end']), 'lockdown_status'] = period['type']
+
+    data['date'] = pd.to_datetime(data['date']).dt.normalize()
+
+    lockdown_df['date'] = lockdown_df['date'].dt.normalize()
+
+    merged_data = pd.merge(data, lockdown_df, on='date', how='left')
+
+    return merged_data
+
+final_train_data['date'] = pd.to_datetime(final_train_data['date']).dt.normalize()  
+final_train_data = add_lockdown_status(final_train_data)
+
+
+
+
 # From all the data we had, we have selected these required features.
 
-# %% [markdown]
 # 
 # 1. **season**: Captures seasonal demand patterns.
 # 2. **holiday**: Identifies demand differences on holidays.
@@ -255,17 +312,25 @@ print(final_train_data.info())
 # 14. **sin_hour/cos_hour**: Encodes cyclical nature of hours for demand.
 # 15. **sin_month/cos_month**: Encodes cyclical nature of months for seasonality.
 # 16. **day_period**: Groups hours into broader day segments for ridership trends.
+# 17. **lockdown_period**: Whether there was partial/complete/no lockdown
 
-# %%
+# In[40]:
+
+
 final_train_data = final_train_data.drop(columns=["date"])
 
-# %% [markdown]
+
 # Now let us Explore the datset and do an EDA
 
-# %%
+# In[62]:
+
+
 final_train_data.columns
 
-# %%
+
+# In[42]:
+
+
 numerical_cols = [
     col for col in final_train_data.columns
     if pd.api.types.is_numeric_dtype(final_train_data[col])
@@ -276,7 +341,10 @@ categorical_cols = [
     if final_train_data[col].dtype == 'object'
 ]
 
-# %%
+
+# In[44]:
+
+
 def detect_outliers(data, numerical_cols):
     """
     Analyse des outliers dans les colonnes numériques à l'aide de la méthode IQR.
@@ -310,10 +378,11 @@ def detect_outliers(data, numerical_cols):
 outlier_info = detect_outliers(final_train_data, numerical_cols)
 
 
-# %% [markdown]
 # We can see that there are outliers in columns like holiday, windspeed and temperature. Note: Holiday has only few values other than 0, hence those values are treated as outliers. We should handle that while dealing with outliers
 
-# %%
+# In[46]:
+
+
 #target variable distribution
 plt.figure(figsize=(5, 3))
 sns.histplot(final_train_data['log_bike_count'], kde=True)
@@ -327,10 +396,12 @@ sns.countplot(x='target_bins', data=final_train_data_plt)
 plt.title('Distribution of log_bike_count by bins')
 plt.show()
 
-# %% [markdown]
+
 # The above 2 plots analysed our target variable. The distribution as we can see is not properly even across all bins
 
-# %%
+# In[48]:
+
+
 #correlation matrix
 plt.figure(figsize=(8, 8))
 correlation_matrix = final_train_data[numerical_cols + ['log_bike_count']].corr()
@@ -338,14 +409,16 @@ sns.heatmap(correlation_matrix, annot=True, cmap='coolwarm', linewidths=0.5, fmt
 plt.title('Correlation Heatmap')
 plt.show()
 
-# %% [markdown]
+
 # We look for Correlations. 
 # 1. We see that cos_hour has high negetive Correlation with target. This seems like a useful information
 # 2. atemp and temp are very correlated. It is expected as both are temperature and one is derived from another.
 #    For non windy days they would be equal.
 # 3. Several other weather factors are correlated to temperature
 
-# %%
+# In[50]:
+
+
 #impact of categorical data on the target
 for cat_col in categorical_cols:
     final_train_data.boxplot(column='log_bike_count', by=cat_col)
@@ -364,12 +437,14 @@ for i, cat_col in enumerate(categorical_cols, 1):
 plt.tight_layout()
 plt.show()
 
-# %% [markdown]
+
 # We are analysing weather and its impact on target.
 # We had derived rainy, snowy and clear from the weather data
 # Weather has impact on target variable and different conditions have different impacts
 
-# %%
+# In[52]:
+
+
 # Identifying time-based columns
 time_cols = [
     col for col in ['hour', 'week', 'sin_hour', 'cos_hour', 'sin_month', 'cos_month']
@@ -391,7 +466,7 @@ for i, col in enumerate(time_cols, 1):
 plt.tight_layout()
 plt.show()
 
-# %% [markdown]
+
 # 
 # 1. **hour vs log_bike_count**: Bike usage peaks around the afternoon and decreases sharply at night.
 # 2. **week vs log_bike_count**: There are weekly variations in bike usage, with peaks in certain weeks and dips towards the end of the year.
@@ -400,13 +475,18 @@ plt.show()
 # 5. **sin_month vs log_bike_count**: The sine-transformed months capture seasonality, showing periodic variation.
 # 6. **cos_month vs log_bike_count**: The cosine-transformed months complement sine transformation, highlighting periodic trends in bike usage.
 
-# %%
+# In[53]:
+
+
 # Pairwise relationships between numerical features and the target variable
 sns.pairplot(final_train_data[numerical_cols], diag_kind='kde', corner=True)
 plt.suptitle("Pairplot for Numerical Features", y=1.02)
 plt.show()
 
-# %%
+
+# In[54]:
+
+
 # Calculating skewness and kurtosis for numerical columns
 print("\nSkewness and Kurtosis:")
 for col in numerical_cols:
@@ -414,12 +494,14 @@ for col in numerical_cols:
     kurtosis = final_train_data[col].kurt()
     print(f"{col}: Skewness={skewness:.2f}, Kurtosis={kurtosis:.2f}")
 
-# %% [markdown]
+
 # 1. Features like holiday and workingday are categorical, so their skewness and kurtosis reflect their limited values or imbalanced frequency distribution.
 # 2. Continuous features like temp, atemp, and distance_to_center show well-behaved distributions with minimal skewness or kurtosis.
 # 3. Outliers are most pronounced in holiday, but we had explained why this is so when we saw box plots.
 
-# %%
+# In[55]:
+
+
 # Univariate analysis for selected features
 features_to_plot = [
     col for col in ['temp', 'humidity', 'windspeed']
@@ -439,15 +521,16 @@ for i, feature in enumerate(features_to_plot, 1):
 plt.tight_layout()
 plt.show()
 
-# %% [markdown]
+
 # We can see that humidity is slightly skewed
 
-# %% [markdown]
 # Now, these numbers give a sense of more numerical understanding of outliers.
 # Note: Holiday has only few values other than 0, hence those values are treated as outliers.
 # We should handle that while dealing with outliers
 
-# %%
+# In[56]:
+
+
 # Identify and drop columns with more than a threshold of missing values
 def drop_high_missing_columns(df, threshold=40):
     """
@@ -524,7 +607,9 @@ else:
 print("Final DataFrame shape:", train_data_cleaned.shape)
 
 
-# %%
+# In[57]:
+
+
 from sklearn.preprocessing import OneHotEncoder
 import pickle
 
@@ -612,7 +697,10 @@ print("Final dataset shape:", train_data_cleaned.shape)
 print("Sample of the updated dataset:")
 print(train_data_cleaned.head())
 
-# %%
+
+# In[58]:
+
+
 def cap_outliers(df, threshold=4, exclude_columns=None):
     """
     Caps numerical columns to a range defined by mean +/- (threshold * standard deviation).
@@ -653,7 +741,9 @@ print("Outliers capped. Preview of updated dataset:")
 print(train_data_cleaned.head())
 
 
-# %%
+# In[60]:
+
+
 from sklearn.preprocessing import RobustScaler
 import pandas as pd
 
@@ -678,16 +768,24 @@ print("Updated dataset with scaled features:")
 print(train_data_cleaned.head())
 
 
-# %%
+# In[68]:
+
+
 train_data_cleaned.columns
 
-# %%
+
+# In[70]:
+
+
 cols_to_drop = ['log_bike_count','bike_count']
 X = train_data_cleaned.drop(columns=cols_to_drop)
 y = train_data_cleaned['log_bike_count']
 X_train, X_val, y_train, y_val = train_test_split(X, y, test_size = 0.3, random_state = 17)
 
-# %%
+
+# In[122]:
+
+
 # Trying out diff models and seeing which one works the best for our dataset
 
 models = [LinearRegression(), Lasso(), Ridge(), DecisionTreeRegressor(), RandomForestRegressor(), AdaBoostRegressor(), GradientBoostingRegressor(), KNeighborsRegressor(), XGBRegressor(),LGBMRegressor()]
@@ -710,13 +808,14 @@ data = pd.DataFrame(data)
 data['Difference'] = ((np.abs(data['Train R2'] - data['Validation R2'])) * 100)/(data['Train R2'])
 data.sort_values(by = 'Validation R2', ascending = False)
 
-# %% [markdown]
+
 # 1. **XGBoost**: It has a high training R² (0.8959) and validation R² (0.8720), with a small difference of 0.4427, indicating a good balance between model complexity and performance without overfitting.
 # 2. **LightGBM**: It also demonstrates strong performance, with a training R² (0.8775) and validation R² (0.8756), and a very small difference of 0.2141, which highlights its reliability and efficiency for generalization.
 # 
 # Both models are candidate models for our pipeline because of their ability to provide robust predictions while maintaining low overfitting compared to models like Random Forest or Decision Tree, which show larger differences.
 
-# %%
+# In[72]:
+
 
 # Use RandomizedSearch Cross Validation to find the Optimal Hyperparameters for the LightGBM Model
 
@@ -750,7 +849,9 @@ print("Best parameters found: ", random_search.best_params_)
 print("Best score found: ", -random_search.best_score_)
 
 
-# %%
+# In[73]:
+
+
 # Evaluate the model on the test set
 best_model = random_search.best_estimator_
 y_pred = best_model.predict(X_val)
@@ -759,11 +860,17 @@ rmse = np.sqrt(mse)
 print("Best Parameters:", random_search.best_params_)
 print("Test RMSE:", rmse)
 
-# %%
+
+# In[74]:
+
+
 # Characteristics of the final model
 best_model
 
-# %%
+
+# In[75]:
+
+
 # Feature Importances
 if hasattr(best_model, "feature_importances_"):
     feature_importances = best_model.feature_importances_
@@ -779,31 +886,35 @@ else:
     print("\nThe best model does not support feature importances.")
 
 
-# %% [markdown]
 # Note: We have tried using XGBoost model, but the final rmse on validation was higher when compared to LightGBM. We had also tried a Stacking regressor approach with GradientBoosting Regressor as Meta model combining our XGBoost and LightGBM models. Even though rmse improved slightly, considering the time complexity, we still chose to keep the LightGBM model as our final choice
 
-# %% [markdown]
 # Preprocessing our test dataset
 
-# %%
+# In[81]:
+
+
 # Load test dataset
+test_path = 'data/final_test.parquet'
+test_data = pd.read_parquet(Path(test_path))
 print("Initial test data columns:")
 print(test_data.columns)
 
 # Step 1: Encode dates and merge external data
-test_data = example_estimator._encode_dates(test_data)
-test_data = example_estimator._merge_external_data(test_data)
+test_data = external_data.example_estimator._encode_dates(test_data)
+test_data = external_data.example_estimator._merge_external_data(test_data)
 
 # Step 2: Preprocess and engineer features (similar to train_data)
 test_data = preprocess_and_engineer_features(test_data, False)
 
-# Step 3: Add school holiday information
-test_data = add_school_holidays(test_data,"/kaggle/input/vacances-paris/vacances_paris.csv")
+# Step 3: Add school holiday information and Covid related information
+test_data = add_school_holidays(test_data, "data/vacances_paris.csv")
+test_data['date'] = pd.to_datetime(test_data['date']).dt.normalize()  
+test_data = add_lockdown_status(test_data)
 
 # Step 4: Handle missing values
 print("\nHandling missing and infinite values in test dataset...")
-test_data = drop_high_missing_columns(test_data, threshold=40)  # Drop columns with high missing percentages
-test_data = handle_missing_values(test_data)  # Handle remaining missing values
+test_data = drop_high_missing_columns(test_data, threshold=40)  
+test_data = handle_missing_values(test_data)  
 
 # Verify remaining missing values
 remaining_missing_test = check_missing_values(test_data)
@@ -857,7 +968,9 @@ print("Sample of the cleaned and preprocessed test dataset:")
 print(test_data.head())
 
 
-# %%
+# In[83]:
+
+
 def prepare_submission(predictions):
         """
         Save predictions
@@ -867,7 +980,10 @@ def prepare_submission(predictions):
         submission_df.to_csv('submission.csv', index=False)
         print("Submission created.")
 
-# %%
+
+# In[85]:
+
+
 assert all(col in test_data.columns for col in X_train.columns), "Test data must have the same columns as the training data."
 
 
@@ -875,6 +991,4 @@ predictions = best_model.predict(test_data[X_train.columns])
 
 print("Predictions on test data:")
 prepare_submission(predictions)
-
-
 
